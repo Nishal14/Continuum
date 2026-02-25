@@ -358,8 +358,9 @@ Issues and pull requests are welcome. For major changes, please open an issue fi
 
 ## Contact
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/continuum/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/continuum/discussions)
+- **Issues**: [GitHub Issues](https://github.com/Nishal14/continuum/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/Nishal14/continuum/discussions)
+- **Email**: nishal.thomas44@gmail.com
 
 ---
 
