@@ -12,6 +12,8 @@
   ],
   "host_permissions": [
     "https://chat.openai.com/*",
+    "https://chatgpt.com/*",
+    "https://*.chatgpt.com/*",
     "http://localhost:8000/*"
   ],
   "background": {

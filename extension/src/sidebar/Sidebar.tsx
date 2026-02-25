@@ -41,6 +41,8 @@ const Sidebar: React.FC = () => {
 
   // Refs for tracking
   const escalationStartTimeRef = useRef<number>(0);
+  const escalationStateRef = useRef<EscalationState>(escalationState);
+  escalationStateRef.current = escalationState;
 
   // Get conversation ID from URL
   useEffect(() => {
@@ -114,7 +116,7 @@ const Sidebar: React.FC = () => {
         setContradictions(data.contradictions?.count || 0);
 
         // Check for escalation trigger (only transition from idle to pending)
-        if (data.escalation?.total_escalations > 0 && escalationState === 'idle') {
+        if (data.escalation?.total_escalations > 0 && escalationStateRef.current === 'idle') {
           console.log('[Continuum] Escalation triggered');
           setEscalationState('escalated_pending');
           setEscalationReason('Cumulative Drift > Threshold');

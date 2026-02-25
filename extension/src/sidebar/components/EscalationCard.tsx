@@ -6,6 +6,49 @@
 
 import React from 'react';
 
+// Inject animation styles once at module load — keeping this outside the component
+// prevents the <style> tag from living inside a backdrop-filter compositing layer,
+// which causes Chrome to re-evaluate keyframes and restart animations on re-renders.
+(() => {
+  if (typeof document === 'undefined') return;
+  const el = document.createElement('style');
+  el.textContent = `
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-30px) scale(0.95); }
+      to   { opacity: 1; transform: translateY(0)     scale(1);    }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to   { opacity: 1; }
+    }
+    @keyframes shimmer {
+      0%   { transform: translateX(0);   }
+      100% { transform: translateX(50%); }
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.3; transform: translate(-50%, -50%) scale(1);   }
+      50%       { opacity: 0.6; transform: translate(-50%, -50%) scale(1.1); }
+    }
+    @keyframes iconPulse {
+      0%, 100% { transform: scale(1);   }
+      50%       { transform: scale(1.1); }
+    }
+    @keyframes dots {
+      0%, 20% { opacity: 0; }
+      50%      { opacity: 1; }
+      100%     { opacity: 0; }
+    }
+    @keyframes barGlow {
+      0%, 100% { opacity: 1;    }
+      50%       { opacity: 0.72; }
+    }
+    .card-inner-content { animation: fadeIn  400ms ease-out;              }
+    .confidence-row     { animation: fadeIn  400ms ease-out;              }
+    .bar-glow-anim      { }
+  `;
+  document.head.appendChild(el);
+})();
+
 interface EscalationCardProps {
   isVisible: boolean;
   status: 'pending' | 'confirmed' | 'override' | 'failed' | null;
@@ -14,7 +57,7 @@ interface EscalationCardProps {
   k2Explanation?: string;
 }
 
-const EscalationCard: React.FC<EscalationCardProps> = ({
+const EscalationCard: React.FC<EscalationCardProps> = React.memo(({
   isVisible,
   status,
   reason,
@@ -128,10 +171,9 @@ const EscalationCard: React.FC<EscalationCardProps> = ({
         </>
       )}
 
-      <div style={{
+      <div className="card-inner-content" style={{
         position: 'relative',
-        zIndex: 1,
-        animation: 'fadeIn 400ms ease-out'
+        zIndex: 1
       }}>
         {/* Icon and Title */}
         <div style={{
@@ -202,12 +244,11 @@ const EscalationCard: React.FC<EscalationCardProps> = ({
 
         {/* K2 Confidence Badge */}
         {content.showConfidence && k2Confidence !== undefined && (
-          <div style={{
+          <div className="confidence-row" style={{
             marginTop: '16px',
             display: 'flex',
             alignItems: 'center',
-            gap: '10px',
-            animation: 'fadeIn 400ms ease-out'
+            gap: '10px'
           }}>
             <span style={{
               fontSize: '11px',
@@ -226,13 +267,12 @@ const EscalationCard: React.FC<EscalationCardProps> = ({
               overflow: 'hidden',
               boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.3)'
             }}>
-              <div style={{
+              <div className="bar-glow-anim" style={{
                 height: '100%',
                 width: `${k2Confidence * 100}%`,
                 background: `linear-gradient(90deg, ${content.color} 0%, ${content.color}cc 100%)`,
                 transition: 'width 800ms cubic-bezier(0.4, 0, 0.2, 1)',
-                boxShadow: `0 0 10px ${content.color}60`,
-                animation: 'barGlow 2s ease-in-out infinite'
+                boxShadow: `0 0 10px ${content.color}60`
               }} />
             </div>
             <span style={{
@@ -250,80 +290,8 @@ const EscalationCard: React.FC<EscalationCardProps> = ({
         )}
       </div>
 
-      {/* CSS Animations */}
-      <style>{`
-        @keyframes slideDown {
-          from {
-            opacity: 0;
-            transform: translateY(-30px) scale(0.95);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
-        }
-
-        @keyframes fadeIn {
-          from {
-            opacity: 0;
-          }
-          to {
-            opacity: 1;
-          }
-        }
-
-        @keyframes shimmer {
-          0% {
-            transform: translateX(0);
-          }
-          100% {
-            transform: translateX(50%);
-          }
-        }
-
-        @keyframes pulse {
-          0%, 100% {
-            opacity: 0.3;
-            transform: translate(-50%, -50%) scale(1);
-          }
-          50% {
-            opacity: 0.6;
-            transform: translate(-50%, -50%) scale(1.1);
-          }
-        }
-
-        @keyframes iconPulse {
-          0%, 100% {
-            transform: scale(1);
-          }
-          50% {
-            transform: scale(1.1);
-          }
-        }
-
-        @keyframes dots {
-          0%, 20% {
-            opacity: 0;
-          }
-          50% {
-            opacity: 1;
-          }
-          100% {
-            opacity: 0;
-          }
-        }
-
-        @keyframes barGlow {
-          0%, 100% {
-            filter: brightness(1);
-          }
-          50% {
-            filter: brightness(1.2);
-          }
-        }
-      `}</style>
     </div>
   );
-};
+});
 
 export default EscalationCard;
