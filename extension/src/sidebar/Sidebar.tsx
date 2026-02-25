@@ -122,7 +122,7 @@ const Sidebar: React.FC = () => {
         }
       } catch (error) {
         if (isMounted) {
-          console.error('[Continuum] Failed to fetch metrics:', error);
+          console.warn('[Continuum] Failed to fetch metrics:', error);
           // Network error - show demo data
           setDriftScore(0.3);
           setDriftVelocity(0.05);
