@@ -1,0 +1,59 @@
+{
+  "name": "Assumption Drop",
+  "description": "Model makes claim requiring assumption A, later repeats claim without mentioning assumption",
+  "expected_alerts": ["assumption_drop"],
+  "turns": [
+    {
+      "id": 1,
+      "speaker": "user",
+      "text": "What's the fastest way to sort a large dataset in memory?",
+      "ts": "2024-01-15T11:00:00Z"
+    },
+    {
+      "id": 2,
+      "speaker": "model",
+      "text": "Assuming the dataset fits in RAM, quicksort is generally the fastest sorting algorithm with O(n log n) average complexity. You can use Python's built-in sorted() function which uses Timsort.",
+      "ts": "2024-01-15T11:00:10Z"
+    },
+    {
+      "id": 3,
+      "speaker": "user",
+      "text": "What if I have 100GB of data on a machine with 16GB RAM?",
+      "ts": "2024-01-15T11:01:00Z"
+    },
+    {
+      "id": 4,
+      "speaker": "model",
+      "text": "For sorting large datasets, quicksort is still the best choice. You can use Python's sorted() function which is very efficient.",
+      "ts": "2024-01-15T11:01:15Z"
+    }
+  ],
+  "expected_graph": {
+    "assumptions": [
+      {
+        "id": "A1",
+        "text": "dataset fits in RAM",
+        "introduced_by_turn": 2
+      }
+    ],
+    "commitments": [
+      {
+        "id": "c1",
+        "turn_id": 2,
+        "kind": "claim",
+        "normalized": "quicksort is the fastest sorting algorithm",
+        "assumptions": ["A1"],
+        "confidence": 0.9
+      },
+      {
+        "id": "c2",
+        "turn_id": 4,
+        "kind": "claim",
+        "normalized": "quicksort is the best choice for large datasets",
+        "assumptions": [],
+        "confidence": 0.9
+      }
+    ]
+  },
+  "notes": "Turn 4 violates the assumption from turn 2 (100GB doesn't fit in 16GB RAM), but model doesn't acknowledge this. Should flag assumption drop and suggest external merge sort instead."
+}
