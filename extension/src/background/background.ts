@@ -8,7 +8,6 @@
  */
 
 const BACKEND_URL = 'http://localhost:8000';
-const BATCH_DELAY_MS = 2000;
 const MAX_RETRIES = 3;
 
 interface Turn {
@@ -18,13 +17,10 @@ interface Turn {
   ts: string;
 }
 
-interface PendingBatch {
-  conversationId: string;
-  turns: Turn[];
-  timer: number | null;
-}
-
-const pendingBatches: Map<string, PendingBatch> = new Map();
+// Per-conversation promise chain — ensures turns are sent in order and
+// processing starts immediately (no setTimeout delay that risks MV3 service
+// worker suspension and in-memory data loss).
+const processingQueues: Map<string, Promise<void>> = new Map();
 
 console.log('[Continuum] Background service worker loaded');
 
@@ -35,8 +31,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('[Continuum] Received message:', message.type);
 
   if (message.type === 'NEW_TURNS') {
-    handleNewTurns(message.payload);
-    sendResponse({ status: 'queued' });
+    // Return true to keep the message port (and service worker) alive.
+    // Chrome suspends MV3 service workers when the port closes — so we must
+    // NOT call sendResponse until all turns are fully processed.
+    handleNewTurns(message.payload).finally(() => {
+      sendResponse({ status: 'done' });
+    });
+    return true; // CRITICAL: keeps service worker alive during async processing
   } else if (message.type === 'RECONCILE') {
     handleReconcile(message.payload).then(sendResponse);
     return true; // Async response
@@ -49,55 +50,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
- * Queue turns for batched analysis.
+ * Queue turns for sequential processing.
+ * Chains onto the existing queue so turns always arrive at the backend
+ * in order, and the first fetch() call keeps the service worker alive.
  */
-function handleNewTurns(payload: { conversationId: string; turns: Turn[] }) {
+function handleNewTurns(payload: { conversationId: string; turns: Turn[] }): Promise<void> {
   const { conversationId, turns } = payload;
-
   console.log(`[Continuum] Queuing ${turns.length} turns for ${conversationId}`);
 
-  // Get or create batch
-  let batch = pendingBatches.get(conversationId);
+  const prev = processingQueues.get(conversationId) ?? Promise.resolve();
+  const next = prev.then(async () => {
+    console.log(`[Continuum] Processing ${turns.length} turns for ${conversationId}`);
+    for (const turn of turns) {
+      await analyzeTurn(conversationId, turn);
+    }
+  });
 
-  if (!batch) {
-    batch = {
-      conversationId,
-      turns: [],
-      timer: null
-    };
-    pendingBatches.set(conversationId, batch);
-  }
+  processingQueues.set(conversationId, next);
 
-  // Add turns to batch
-  batch.turns.push(...turns);
+  // Clean up reference once this batch finishes
+  next.finally(() => {
+    if (processingQueues.get(conversationId) === next) {
+      processingQueues.delete(conversationId);
+    }
+  });
 
-  // Clear existing timer
-  if (batch.timer) {
-    clearTimeout(batch.timer);
-  }
-
-  // Set new timer to process batch
-  batch.timer = setTimeout(() => {
-    processBatch(conversationId);
-  }, BATCH_DELAY_MS) as unknown as number;
-}
-
-/**
- * Process a batch of turns.
- */
-async function processBatch(conversationId: string) {
-  const batch = pendingBatches.get(conversationId);
-  if (!batch || batch.turns.length === 0) return;
-
-  console.log(`[Continuum] Processing batch of ${batch.turns.length} turns`);
-
-  // Clear batch
-  pendingBatches.delete(conversationId);
-
-  // Send each turn to backend (later: optimize to send all at once)
-  for (const turn of batch.turns) {
-    await analyzeTurn(conversationId, turn);
-  }
+  return next;
 }
 
 /**
@@ -208,7 +186,7 @@ async function handleAutoFill(payload: { text: string }) {
 function showNotification(alert: any) {
   chrome.notifications.create({
     type: 'basic',
-    iconUrl: 'icons/icon48.png',
+    iconUrl: 'logo.png',
     title: 'Continuum Alert',
     message: alert.message || 'Epistemic drift detected',
     priority: alert.severity === 'high' ? 2 : 1

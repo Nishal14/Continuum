@@ -14,6 +14,9 @@ interface Turn {
 let lastSeenTurnId = 0;
 let observerActive = false;
 const DEBOUNCE_MS = 800;
+const NAVIGATION_SETTLE_MS = 600; // Wait for SPA to render new chat content
+
+let currentConversationId = '';
 
 console.log('[Continuum] Content script loaded');
 
@@ -35,38 +38,50 @@ function extractTurnsFromDOM(): Turn[] {
   ];
 
   let messageNodes: NodeListOf<Element> | null = null;
+  let matchedSelector = '';
 
   for (const selector of selectors) {
     messageNodes = document.querySelectorAll(selector);
-    if (messageNodes.length > 0) break;
+    if (messageNodes.length > 0) {
+      matchedSelector = selector;
+      break;
+    }
   }
 
+  console.log('[Continuum] extractTurnsFromDOM: selector=', matchedSelector || 'NONE', 'count=', messageNodes?.length ?? 0);
+
   if (!messageNodes || messageNodes.length === 0) {
+    // Log a sample of the DOM to help debug selector issues
+    const sample = document.body?.innerHTML?.slice(0, 500) ?? '';
+    console.log('[Continuum] No message nodes found. DOM sample:', sample);
     return [];
   }
 
   messageNodes.forEach((node, index) => {
     try {
+      // Turn ID = 1-based DOM position. Sequential and monotonically increasing,
+      // which the backend relies on for ordering commitments (prior.turn_id < current.turn_id).
+      // A hash would give arbitrary out-of-order IDs that break contradiction detection.
+      const id = index + 1;
+
+      // Only send turns we haven't sent yet (new turns appended at the end)
+      if (id <= lastSeenTurnId) return;
+
       // Determine speaker
       const roleAttr = node.getAttribute('data-message-author-role');
       const speaker: 'user' | 'model' =
         roleAttr === 'user' ? 'user' : 'model';
 
-      // Extract text content
-      const textElement = node.querySelector('.markdown, .whitespace-pre-wrap, [class*="text"]');
-      const text = textElement?.textContent?.trim() || '';
+      // Extract text content — prefer semantic containers, fall back to node itself
+      const textElement = node.querySelector('.markdown, .whitespace-pre-wrap');
+      const text = ((textElement?.textContent || node.textContent) ?? '').trim().replace(/\s+/g, ' ');
+
+      console.log(`[Continuum] Turn ${id} speaker=${speaker} textLen=${text.length} preview="${text.slice(0, 60)}"`);
 
       if (!text || text.length < 2) return; // Skip empty
 
-      // Generate stable ID (hash of content + position)
-      const id = hashCode(text + index);
-
-      // Timestamp
       const ts = new Date().toISOString();
-
-      if (id > lastSeenTurnId) {
-        turns.push({ id, speaker, text, ts });
-      }
+      turns.push({ id, speaker, text, ts });
     } catch (err) {
       console.error('[Continuum] Error extracting turn:', err);
     }
@@ -75,18 +90,6 @@ function extractTurnsFromDOM(): Turn[] {
   return turns;
 }
 
-/**
- * Simple hash function for generating turn IDs.
- */
-function hashCode(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  return Math.abs(hash);
-}
 
 /**
  * Send turns to background script.
@@ -94,23 +97,39 @@ function hashCode(str: string): number {
 function sendTurnsToBackground(turns: Turn[]) {
   if (turns.length === 0) return;
 
+  // chrome.runtime itself throws (not just returns undefined) when context is invalidated
+  try {
+    if (!chrome.runtime?.id) return;
+  } catch {
+    return; // Extension context invalidated
+  }
+
   console.log('[Continuum] Sending to background:', turns.length, 'turns', turns);
 
-  chrome.runtime.sendMessage({
-    type: 'NEW_TURNS',
-    payload: {
-      conversationId: getConversationId(),
-      turns
-    }
-  }, (response) => {
-    if (chrome.runtime.lastError) {
-      console.error('[Continuum] Message send error:', chrome.runtime.lastError);
-    } else {
-      console.log('[Continuum] Background responded:', response);
-    }
-  });
+  try {
+    chrome.runtime.sendMessage({
+      type: 'NEW_TURNS',
+      payload: {
+        conversationId: getConversationId(),
+        turns
+      }
+    }, (_response) => {
+      // Callback itself runs in an async context — needs its own guard
+      try {
+        if (chrome.runtime.lastError) {
+          // Suppress "Extension context invalidated" — expected after reload
+          return;
+        }
+        console.log('[Continuum] Background responded:', _response);
+      } catch {
+        // Context invalidated between sendMessage and callback firing
+      }
+    });
 
-  lastSeenTurnId = Math.max(...turns.map(t => t.id));
+    lastSeenTurnId = Math.max(...turns.map(t => t.id));
+  } catch {
+    // Extension was reloaded/updated — stop silently
+  }
 }
 
 /**
@@ -147,22 +166,12 @@ function initObserver() {
   if (observerActive) return;
 
   const targetNode = document.body;
-  const config = { childList: true, subtree: true };
+  const config = { childList: true, subtree: true, characterData: true };
 
-  const observer = new MutationObserver((mutations) => {
-    // Check if any mutation affects message containers
-    const hasRelevantChange = mutations.some(m =>
-      Array.from(m.addedNodes).some(node =>
-        node instanceof Element &&
-        (node.matches('[data-message-author-role]') ||
-         node.querySelector('[data-message-author-role]'))
-      )
-    );
-
-    if (hasRelevantChange) {
-      console.log('[Continuum] Mutation detected - message container added');
-      observeDOM();
-    }
+  const observer = new MutationObserver(() => {
+    // Fire on every DOM mutation — catches streaming text updates,
+    // not just newly-added message container elements
+    observeDOM();
   });
 
   observer.observe(targetNode, config);
@@ -171,6 +180,50 @@ function initObserver() {
 
   // Initial extraction
   observeDOM();
+}
+
+/**
+ * Called whenever the conversation changes (SPA navigation to a different chat).
+ * Resets turn tracking and re-scans the new chat's existing messages.
+ */
+function onConversationChanged() {
+  const newId = getConversationId();
+  if (newId === currentConversationId) return;
+
+  console.log(`[Continuum] Conversation changed: ${currentConversationId} → ${newId}`);
+  currentConversationId = newId;
+
+  // Reset so all messages in the new chat are treated as unseen
+  lastSeenTurnId = 0;
+
+  // ChatGPT needs time to render the new chat's messages after navigation
+  setTimeout(() => {
+    const turns = extractTurnsFromDOM();
+    if (turns.length > 0) {
+      console.log(`[Continuum] Loaded ${turns.length} existing turns from conversation ${newId}`);
+      sendTurnsToBackground(turns);
+    } else {
+      console.log(`[Continuum] No existing turns found in conversation ${newId} (new chat)`);
+    }
+  }, NAVIGATION_SETTLE_MS);
+}
+
+/**
+ * Patch history.pushState and listen for popstate so we catch every
+ * SPA navigation ChatGPT does (including switching between chats).
+ */
+function initNavigationDetection() {
+  // pushState is how ChatGPT navigates between chats
+  const originalPushState = history.pushState.bind(history);
+  history.pushState = function(...args: Parameters<typeof history.pushState>) {
+    originalPushState(...args);
+    onConversationChanged();
+  };
+
+  // popstate handles browser back/forward
+  window.addEventListener('popstate', onConversationChanged);
+
+  console.log('[Continuum] Navigation detection initialized');
 }
 
 /**
@@ -185,9 +238,11 @@ function waitForChatGPT() {
   }
 
   console.log('[Continuum] ChatGPT page ready, initializing observer...');
+  currentConversationId = getConversationId();
   initObserver();
+  initNavigationDetection();
 
-  // Extract any existing messages
+  // Extract any existing messages in the current chat
   const existingTurns = extractTurnsFromDOM();
   if (existingTurns.length > 0) {
     console.log(`[Continuum] Found ${existingTurns.length} existing messages`);
@@ -203,18 +258,22 @@ if (document.readyState === 'loading') {
 }
 
 // Listen for messages from background
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'INJECT_TEXT') {
-    // Auto-fill functionality: inject text into chat input
-    const textarea = document.querySelector('textarea[data-id]') as HTMLTextAreaElement;
-    if (textarea) {
-      textarea.value = message.text;
-      textarea.focus();
-      textarea.dispatchEvent(new Event('input', { bubbles: true }));
-      sendResponse({ success: true });
-    } else {
-      sendResponse({ success: false, error: 'Textarea not found' });
+try {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'INJECT_TEXT') {
+      // Auto-fill functionality: inject text into chat input
+      const textarea = document.querySelector('textarea[data-id]') as HTMLTextAreaElement;
+      if (textarea) {
+        textarea.value = message.text;
+        textarea.focus();
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        sendResponse({ success: true });
+      } else {
+        sendResponse({ success: false, error: 'Textarea not found' });
+      }
     }
-  }
-  return true; // Keep channel open for async response
-});
+    return true; // Keep channel open for async response
+  });
+} catch {
+  // Extension context invalidated — skip listener registration
+}

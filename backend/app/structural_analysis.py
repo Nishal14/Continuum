@@ -87,7 +87,8 @@ def _analyze_negation_scope(text: str) -> float:
     # Allow optional articles (a, an, the) between negation and positive word
     negated_positive_patterns = [
         (r'\b(?:not|no|never|n\'t)\s+(?:a|an|the)?\s*(?:good|great|excellent|better|best|essential|important|valuable|beneficial|should|must|can|recommend|prefer|ideal)\b', -1.5),
-        (r'\b(?:shouldn\'t|can\'t|won\'t|don\'t|isn\'t|aren\'t)\b', -0.8),
+        (r'\b(?:shouldn\'t|can\'t|won\'t|don\'t|isn\'t|aren\'t|wasn\'t|weren\'t|hasn\'t|haven\'t)\b', -0.8),
+        (r'\b(?:not|n\'t)\s+(?:ideal|great|good|the\s+best|recommended|suitable|appropriate|right)\b', -1.0),
         (r'\bdisagree\b', -0.7),
     ]
 
@@ -126,6 +127,9 @@ def _analyze_comparatives(text: str) -> float:
     negative_comparatives = [
         (r'\b(?:worse|inferior|degraded|less\s+effective|problematic)\b', -1.0),
         (r'\b(?:worst|terrible|awful)\b', -1.2),
+        # Negated positives: "not better", "isn't ideal", "aren't the best"
+        (r'\b(?:not|n\'t)\s+(?:a\s+)?(?:better|superior|best|optimal|ideal|perfect|preferable|more\s+effective)\b', -1.5),
+        (r'\b(?:isn\'t|aren\'t|wasn\'t|weren\'t)\s+(?:better|superior|best|optimal|ideal|perfect|preferable|great|good|the\s+best)\b', -1.5),
     ]
 
     for pattern, weight in positive_comparatives:

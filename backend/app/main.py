@@ -35,6 +35,7 @@ from app.analyzer import (
     generate_k2_reconciliation,
     process_k2_escalation_async
 )
+from app.drift_accumulation import calculate_drift_velocity, apply_drift_decay
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -136,6 +137,15 @@ async def analyze_turn(request: AnalyzeTurnRequest, background_tasks: Background
     graph.commitments.extend(new_commitments)
     graph.edges.extend(new_edges)
     graph.alerts.extend(new_alerts)
+
+    # Update drift velocity on the graph object
+    graph.drift_velocity = calculate_drift_velocity(graph)
+
+    # If no drift events were added this turn, increment stability counter and apply decay
+    turn_had_drift = any(e.detected_at_turn == request.new_turn.id for e in graph.drift_events)
+    if not turn_had_drift:
+        graph.turns_since_last_drift += 1
+        apply_drift_decay(graph)
 
     # Store metadata for this conversation
     if "analysis_history" not in graph.metadata:
@@ -387,9 +397,22 @@ async def get_conversation_metrics(conversation_id: str):
     - Stability scores
     - Alert breakdown by type and severity
     - Overall health score (0-100)
+
+    Returns empty/zero metrics for conversations not yet analyzed (new chats).
     """
     if conversation_id not in conversation_graphs:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        # New conversation not yet seen — return zeroes so extension shows a clean state
+        return {
+            "drift": {
+                "cumulative_drift_score": 0,
+                "drift_velocity": 0,
+                "is_recovering": False
+            },
+            "commitments": {"active": 0, "inactive": 0, "total": 0},
+            "contradictions": {"count": 0},
+            "escalation": {"total_escalations": 0},
+            "health_score": 100
+        }
 
     graph = conversation_graphs[conversation_id]
     metrics = compute_epistemic_metrics(graph)

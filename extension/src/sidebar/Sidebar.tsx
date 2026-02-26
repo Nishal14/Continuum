@@ -13,10 +13,11 @@ import DriftMeter from './components/DriftMeter';
 import DriftTimeline from './components/DriftTimeline';
 import EscalationCard from './components/EscalationCard';
 import IntegritySnapshot from './components/IntegritySnapshot';
+import GraphView from './components/GraphView';
 import type { Alert, DriftEvent, MetricsResponse, K2StatusResponse } from './types';
 
 const API_BASE_URL = 'http://localhost:8000';
-const METRICS_POLL_INTERVAL = 3000; // 3 seconds
+const METRICS_POLL_INTERVAL = 1500; // 1.5 seconds
 const K2_POLL_INTERVAL = 2000; // 2 seconds when escalated
 const K2_TIMEOUT = 90000; // 90 seconds timeout
 
@@ -33,6 +34,9 @@ const Sidebar: React.FC = () => {
   const [activeCommitments, setActiveCommitments] = useState<number>(0);
   const [contradictions, setContradictions] = useState<number>(0);
 
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'overview' | 'graph'>('overview');
+
   // Escalation state machine
   const [escalationState, setEscalationState] = useState<EscalationState>('idle');
   const [escalationReason, setEscalationReason] = useState<string>('');
@@ -44,17 +48,14 @@ const Sidebar: React.FC = () => {
   const escalationStateRef = useRef<EscalationState>(escalationState);
   escalationStateRef.current = escalationState;
 
-  // Get conversation ID from URL
+  // Extract conversation ID from a ChatGPT URL
+  const extractConversationId = (url: string): string => {
+    const match = url.match(/\/c\/([a-zA-Z0-9-]+)/);
+    return match ? match[1] : 'default';
+  };
+
+  // Get conversation ID from URL, and update it on navigation
   useEffect(() => {
-    // TEMP: Hardcode test conversation ID with high drift
-    const TEST_MODE = false;
-
-    if (TEST_MODE) {
-      console.log('[Continuum] TEST MODE: Using high-overlap-drift conversation');
-      setConversationId('high-overlap-drift');
-      return;
-    }
-
     // Safety check for Chrome extension context
     if (typeof chrome === 'undefined' || !chrome.tabs) {
       console.warn('[Continuum] Chrome tabs API not available');
@@ -62,17 +63,50 @@ const Sidebar: React.FC = () => {
       return;
     }
 
+    // Set initial conversation ID from current tab URL
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const url = tabs[0]?.url || '';
       console.log('[Continuum] Current URL:', url);
-
-      const match = url.match(/\/c\/([a-zA-Z0-9-]+)/);
-      const id = match ? match[1] : 'default';
-
+      const id = extractConversationId(url);
       console.log('[Continuum] Conversation ID extracted:', id);
       setConversationId(id);
     });
+
+    // Listen for URL changes (SPA navigation to new chats)
+    const onTabUpdated = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (!changeInfo.url) return;
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id === tabId) {
+          const id = extractConversationId(changeInfo.url!);
+          console.log('[Continuum] URL changed, new conversation ID:', id);
+          setConversationId(id);
+        }
+      });
+    };
+
+    chrome.tabs.onUpdated.addListener(onTabUpdated);
+    return () => {
+      chrome.tabs.onUpdated.removeListener(onTabUpdated);
+    };
   }, []);
+
+  // Reset all state when switching to a different conversation
+  const prevConversationIdRef = useRef<string>('');
+  useEffect(() => {
+    if (!conversationId || conversationId === prevConversationIdRef.current) return;
+    prevConversationIdRef.current = conversationId;
+
+    setDriftScore(0);
+    setDriftVelocity(0);
+    setDriftEvents([]);
+    setIsRecovering(false);
+    setActiveCommitments(0);
+    setContradictions(0);
+    setEscalationState('idle');
+    setEscalationReason('');
+    setK2Confidence(0);
+    setK2Explanation('');
+  }, [conversationId]);
 
   // Setup polling
   useEffect(() => {
@@ -90,16 +124,6 @@ const Sidebar: React.FC = () => {
         const response = await fetch(url);
 
         if (!response.ok || !isMounted) {
-          if (response.status === 404) {
-            // Use demo data to show the UI works
-            if (isMounted) {
-              setDriftScore(0.3);
-              setDriftVelocity(0.05);
-              setIsRecovering(false);
-              setActiveCommitments(0);
-              setContradictions(0);
-            }
-          }
           return;
         }
 
@@ -125,12 +149,6 @@ const Sidebar: React.FC = () => {
       } catch (error) {
         if (isMounted) {
           console.warn('[Continuum] Failed to fetch metrics:', error);
-          // Network error - show demo data
-          setDriftScore(0.3);
-          setDriftVelocity(0.05);
-          setIsRecovering(false);
-          setActiveCommitments(0);
-          setContradictions(0);
         }
       }
     };
@@ -326,7 +344,41 @@ const Sidebar: React.FC = () => {
           </p>
         </header>
 
-      {/* Main Content */}
+      {/* Tab Switcher */}
+      <div style={{
+        display: 'flex',
+        gap: '4px',
+        marginBottom: '20px',
+        background: 'rgba(255,255,255,0.05)',
+        borderRadius: '10px',
+        padding: '4px',
+      }}>
+        {(['overview', 'graph'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              flex: 1,
+              padding: '7px 0',
+              borderRadius: '7px',
+              border: 'none',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: '600',
+              letterSpacing: '0.5px',
+              textTransform: 'uppercase',
+              background: activeTab === tab ? 'rgba(102,126,234,0.22)' : 'transparent',
+              color: activeTab === tab ? '#667eea' : 'rgba(255,255,255,0.38)',
+              transition: 'background 200ms ease, color 200ms ease',
+            }}
+          >
+            {tab === 'overview' ? 'Overview' : 'Graph'}
+          </button>
+        ))}
+      </div>
+
+      {/* Overview Tab */}
+      {activeTab === 'overview' && (
       <div>
         {/* 1. Drift Meter */}
         <DriftMeter
@@ -362,6 +414,12 @@ const Sidebar: React.FC = () => {
           trendDirection={trendDirection}
         />
       </div>
+      )}
+
+      {/* Graph Tab */}
+      {activeTab === 'graph' && (
+        <GraphView conversationId={conversationId} apiBaseUrl={API_BASE_URL} />
+      )}
 
         {/* Footer */}
         <footer style={{

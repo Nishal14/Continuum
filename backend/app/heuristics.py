@@ -178,7 +178,10 @@ def detect_polarity_flip(graph: CommitmentGraph, commitment: Commitment) -> Tupl
         if not prior.topic_anchor:
             continue  # Skip commitments without topic anchor
 
-        anchor_match = (prior.topic_anchor == commitment.topic_anchor)
+        # Fuzzy anchor match: exact OR one contains the other
+        # e.g., "unit testing" matches "testing", "python script" matches "python"
+        a1, a2 = prior.topic_anchor, commitment.topic_anchor
+        anchor_match = (a1 == a2) or (a1 in a2) or (a2 in a1)
 
         if not anchor_match:
             continue  # Skip - different topics
@@ -187,18 +190,26 @@ def detect_polarity_flip(graph: CommitmentGraph, commitment: Commitment) -> Tupl
         is_contradiction = False
         confidence_delta = abs(commitment.confidence - prior.confidence)
 
-        # Only flag TRUE opposites (positive ↔ negative)
-        # Neutral is not opposite to anything
+        # TRUE opposites (positive ↔ negative) — always a contradiction
         is_opposite_polarity = (
             (prior.polarity == "positive" and commitment.polarity == "negative") or
             (prior.polarity == "negative" and commitment.polarity == "positive")
         )
 
+        # WEAKER SIGNAL: explicit contradiction marker + neutral→non-neutral shift
+        # catches "X works" (neutral) → "actually X doesn't work" (negative, has_marker)
+        is_marked_shift = (
+            has_marker and
+            commitment.polarity != "neutral" and
+            prior.polarity != commitment.polarity
+        )
+
         if is_opposite_polarity:
-            # True opposite polarity on SAME topic → contradiction
+            is_contradiction = True
+        elif is_marked_shift:
             is_contradiction = True
         elif has_marker and prior.polarity != commitment.polarity:
-            # Explicit contradiction marker + polarity shift
+            # Explicit contradiction marker + any polarity shift
             is_contradiction = True
 
         if is_contradiction:
@@ -478,8 +489,13 @@ def extract_topic_anchor(text: str) -> Optional[str]:
     # Common copula verbs that signal subject-predicate structure
     copulas = ['is', 'are', 'was', 'were', 'be', 'being', 'been']
 
-    # Common stop words to skip
-    stop_words = {'i', 'the', 'a', 'an', 'to', 'for', 'of', 'in', 'on', 'at', 'by', 'with'}
+    # Common stop words and pronouns to skip
+    stop_words = {
+        'i', 'the', 'a', 'an', 'to', 'for', 'of', 'in', 'on', 'at', 'by', 'with',
+        'you', 'your', 'it', 'its', 'this', 'that', 'these', 'those',
+        'they', 'their', 'there', 'we', 'our', 'my', 'me', 'him', 'her', 'us',
+        'can', 'will', 'would', 'could', 'should', 'may', 'might', 'shall',
+    }
 
     tokens = text_lower.split()
     if not tokens:
@@ -510,14 +526,25 @@ def extract_topic_anchor(text: str) -> Optional[str]:
             if anchor not in stop_words and len(anchor) > 2:
                 return anchor
 
-    # Strategy 3: Take first significant content word
+    # Strategy 3: Take first significant content word — skip generic filler words
+    # that appear at the start of ChatGPT responses and don't represent a topic
+    common_verbs = {
+        'think', 'believe', 'seems', 'appears', 'actually', 'however',
+        # ChatGPT response starters
+        'let', 'here', 'sure', 'great', 'now', 'also', 'just', 'well',
+        'note', 'yes', 'okay', 'certainly', 'absolutely',
+        # Question words (don't make good topic anchors)
+        'how', 'what', 'when', 'where', 'why', 'which',
+        # Generic action verbs
+        'get', 'make', 'take', 'use', 'need', 'want', 'help', 'try',
+        'start', 'look', 'see', 'know', 'come', 'give', 'tell', 'show',
+    }
     for token in tokens:
         cleaned = token.strip('.,!?;:\'\"')
-        if cleaned not in stop_words and len(cleaned) > 2:
-            # Check if it's likely a noun (very simple heuristic: not a common verb)
-            common_verbs = {'think', 'believe', 'seems', 'appears', 'actually', 'however'}
-            if cleaned not in common_verbs:
-                return cleaned
+        # Normalize contractions: "here's" → "here", "let's" → "let"
+        cleaned = cleaned.split("'")[0]
+        if cleaned not in stop_words and cleaned not in common_verbs and len(cleaned) > 2:
+            return cleaned
 
     return None
 
