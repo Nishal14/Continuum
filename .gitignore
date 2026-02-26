@@ -59,6 +59,7 @@ TEST_*.md
 *_TEST.md
 demo/
 test_demo_*.py
+demo_*.py
 
 # Documentation (keep only README.md)
 ARCHITECTURE.md
