@@ -58,7 +58,8 @@ scripts/demo_*
 TEST_*.md
 *_TEST.md
 demo/
-test_demo_*.py
+test_demo_8001.py
+test_demo_debug.py
 demo_*.py
 
 # Documentation (keep only README.md)
